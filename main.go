@@ -102,7 +102,7 @@ func main() {
 			}
 		}
 	})
-	err = r.Run("127.0.0.1:8090")
+	err = r.Run("0.0.0.0:8090")
 	if err != nil {
 		return
 	}
