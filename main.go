@@ -12,6 +12,8 @@ import (
 	"time"
 )
 
+var DB *gorm.DB
+
 type License struct {
 	ID                   int            `gorm:"primaryKey" json:"id"`
 	ActivationCode       string         `gorm:"index:idx_activation_code" json:"activation_code"`
@@ -19,11 +21,6 @@ type License struct {
 	CreatedAt            time.Time      `json:"created_at" json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at" json:"updated_at"`
 	DeletedAt            gorm.DeletedAt `gorm:"index" json:"deleted_at"`
-}
-
-type RequestDTO struct {
-	ProtectedMachineCode string `gorm:"protected_machine_code" json:"protected_machine_code"`
-	ActivationCode       string `gorm:"index:idx_activation_code" json:"activation_code"`
 }
 
 func JsonHttpResponse(c *gin.Context, code int, message string, data interface{}) {
@@ -62,26 +59,44 @@ func CORSMiddleware() gin.HandlerFunc {
 	}
 }
 
+func generateActivationCode() {
+	const SECRET = "random_seed_1234567890"
+	var licenses []License
+	for it := 0; it < 1000; it++ {
+		hash := sha512.New()
+		hash.Write([]byte(time.Now().String() + SECRET))
+		hashedBytes := hash.Sum(nil)
+		code := fmt.Sprintf("%x", hashedBytes)
+		licenses = append(licenses, License{ActivationCode: code, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	}
+	DB.Create(&licenses)
+}
+
 func main() {
 	gin.SetMode(gin.ReleaseMode)
 	logFile, _ := os.OpenFile("app.log", os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0666)
 	defer logFile.Close()
 	logger := log.New(logFile, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
 
-	db, _ := gorm.Open(sqlite.Open("app.db"), &gorm.Config{})
-	err := db.AutoMigrate(&License{})
+	DB, _ = gorm.Open(sqlite.Open("app.db"), &gorm.Config{})
+	err := DB.AutoMigrate(&License{})
 	if err != nil {
 		return
 	}
 	r := gin.Default()
 	r.Use(CORSMiddleware())
 	r.POST("/", func(c *gin.Context) {
+		type RequestDTO struct {
+			ProtectedMachineCode string `gorm:"protected_machine_code" json:"protected_machine_code"`
+			ActivationCode       string `gorm:"index:idx_activation_code" json:"activation_code"`
+		}
+
 		var dto RequestDTO
 		c.ShouldBindJSON(&dto)
 		logger.Printf("Received authorization request: %#v\n", dto)
 
 		var licenses []License
-		db.Model(&License{}).Where("activation_code = ?", dto.ActivationCode).Limit(1).Find(&licenses)
+		DB.Model(&License{}).Where("activation_code = ?", dto.ActivationCode).Limit(1).Find(&licenses)
 		if len(licenses) == 0 {
 			JsonHttpResponse(c, 2, "无此激活码，验证失败", nil)
 		} else {
@@ -96,11 +111,32 @@ func main() {
 			} else {
 				license := licenses[0]
 				license.ProtectedMachineCode = dto.ProtectedMachineCode
-				db.Model(License{}).Where("activation_code = ?", licenses[0].ActivationCode).Updates(&license)
+				DB.Model(License{}).Where("activation_code = ?", licenses[0].ActivationCode).Updates(&license)
 				logger.Println("success")
 				JsonHttpResponse(c, 0, "success", generateSecretKey(dto.ProtectedMachineCode))
 			}
 		}
+	})
+	r.POST("/code/get", func(c *gin.Context) {
+		type RequestDTO struct {
+			SecretKey string `json:"secret_key"`
+		}
+		var dto RequestDTO
+		c.ShouldBindJSON(&dto)
+		logger.Printf("Received code get request: %#v\n", dto)
+		if dto.SecretKey != "ahfihfoh3r8hw83xnw94vnyt7348b87ybb6v563c34908v3x34rn7f" {
+			JsonHttpResponse(c, 1, "secret key错误", nil)
+			return
+		}
+		var licenses []License
+		DB.Model(&License{}).Where("protected_machine_code = ?", "").Limit(1).Find(&licenses)
+		if len(licenses) == 0 {
+			logger.Println("激活码已经用完, 正在生成新的激活码..")
+			generateActivationCode()
+			DB.Model(&License{}).Find(&licenses).Limit(1)
+		}
+		logger.Println("找到了可用的激活码: ", licenses[0].ActivationCode)
+		JsonHttpResponse(c, 0, "success", licenses[0].ActivationCode)
 	})
 	err = r.Run("0.0.0.0:8090")
 	if err != nil {
