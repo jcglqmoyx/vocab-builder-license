@@ -43,7 +43,6 @@ func generateSecretKey(s string) string {
 		s = fmt.Sprintf("%x", hashedBytes)
 		secretKey = s
 	}
-	println(secretKey)
 	return secretKey
 }
 
