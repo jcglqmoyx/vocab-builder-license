@@ -18,6 +18,7 @@ type License struct {
 	ID                   int            `gorm:"primaryKey" json:"id"`
 	ActivationCode       string         `gorm:"index:idx_activation_code" json:"activation_code"`
 	ProtectedMachineCode string         `gorm:"index:idx_protected_machine_code" json:"protected_machine_code"`
+	Used                 bool           `gorm:"index:idx_used" json:"used"`
 	CreatedAt            time.Time      `json:"created_at" json:"created_at"`
 	UpdatedAt            time.Time      `json:"updated_at" json:"updated_at"`
 	DeletedAt            gorm.DeletedAt `gorm:"index" json:"deleted_at"`
@@ -129,14 +130,17 @@ func main() {
 			return
 		}
 		var licenses []License
-		DB.Model(&License{}).Where("protected_machine_code = ?", "").Limit(1).Find(&licenses)
+		DB.Model(&License{}).Where("protected_machine_code = ? and used = ?", "", false).Limit(1).Find(&licenses)
 		if len(licenses) == 0 {
 			logger.Println("激活码已经用完, 正在生成新的激活码..")
 			generateActivationCode()
-			DB.Model(&License{}).Find(&licenses).Limit(1)
+			DB.Model(&License{}).Where("protected_machine_code = ? and used = ?", "", false).Limit(1).Find(&licenses)
 		}
 		logger.Println("找到了可用的激活码: ", licenses[0].ActivationCode)
-		JsonHttpResponse(c, 0, "success", licenses[0].ActivationCode)
+		res := licenses[0].ActivationCode
+		licenses[0].Used = true
+		DB.Model(License{}).Where("activation_code = ?", licenses[0].ActivationCode).Updates(licenses[0])
+		JsonHttpResponse(c, 0, "success", res)
 	})
 	err = r.Run("0.0.0.0:8090")
 	if err != nil {
